@@ -1,8 +1,11 @@
 <div align="center">
 
-![FairySDK Hero](assets/fairy-hero.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/fairy-wordmark-dark.svg">
+  <img src="assets/fairy-wordmark-light.svg" alt="FairySDK" width="500">
+</picture>
 
-# FairySDK
+<br/>
 
 **Controlled network experiments. Evidence. Path failure diagnosis.**
 
@@ -77,6 +80,13 @@ The key ideas:
   hypotheses. Both are pure functions over `SurveyState`.
 
 Start with `docs/concepts.md` and `docs/experiment-model.md`.
+
+<br/>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/fairy-survey-flow-dark.svg">
+  <img src="assets/fairy-survey-flow-light.svg" alt="Survey flow: Target URL → Policy → Experiments → Observations → Report" width="700">
+</picture>
 
 ---
 
@@ -620,6 +630,14 @@ inference. Details in ROADMAP.md.
 FairySDK is named for the idea of a small, luminous scout — something that
 flies out, gathers what it finds, and comes back with evidence rather
 than opinions.
+
+<br/>
+
+<img src="assets/fairy-hero.png" alt="Bagboo — the FairySDK mascot" width="120" align="left" style="margin-right: 16px; border-radius: 12px;">
+
+The mascot is **Bagboo** — a small, bright creature that embodies the
+project's spirit: lightweight, evidence-first, and unafraid to fly into
+the unknown to find out what's really happening.
 
 > **Disclaimer.** FairySDK is an independent open-source project.
 
