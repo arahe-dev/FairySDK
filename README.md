@@ -2,27 +2,31 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/fairy-wordmark-dark.svg">
-  <img src="assets/fairy-wordmark-light.svg" alt="FairySDK" width="500">
+  <img src="assets/fairy-wordmark-light.svg" alt="FairySDK" width="460">
 </picture>
 
 <br/>
 
-**Controlled network experiments. Evidence. Path failure diagnosis.**
+**Controlled network experiments. Experiment data. Path failure diagnosis.**
 
 [![Go](https://img.shields.io/badge/Go-%3E%3D1.27.1-00ADD8?logo=go&logoColor=white)](https://golang.org/)
 [![status](https://img.shields.io/badge/status-v0.1.0--pre-brightgreen)](https://github.com/arahe-dev/FairySDK)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
+<br/>
+
+<img src="assets/fairy-hero.png" alt="FairySDK icon" width="96" style="border-radius: 16px;">
+
 </div>
 
 ---
 
-## One survey. Structured evidence. No guessing.
+## One survey. Structured experiment data. No guessing.
 
 FairySDK is a small Go library and CLI that runs **controlled network
 experiments** against a target and returns a structured `Report` of what
 happened — and, more importantly, **where the path fails** and **what the
-evidence supports**.
+experiment data supports**.
 
 > **Status.** FairySDK **v0.1.0-pre** is in early development. The public
 > API is stabilizing: `Survey(ctx, url)` and the advanced `New(Config)`
@@ -62,17 +66,17 @@ evidence supports**.
 
 FairySDK is a **controlled network experiment framework**. You give it a
 target URL; it runs a sequence of layered probes (DNS, TCP, TLS, HTTP, UDP,
-QUIC), converts raw errors into **structured evidence**, and produces a
-`Report` with findings and confidence levels.
+QUIC), converts raw errors into **structured experiment data**, and produces
+a `Report` with findings and confidence levels.
 
 The key ideas:
 
 * **Experiments are deterministic.** Same inputs — same experiment ID. That
   gives deduplication, restartability, and reproducibility for free.
-* **Raw errors become structured evidence.** `ECONNREFUSED`, `TLS alert 42`,
-  `QUIC handshake timeout` — each becomes a typed `Evidence` value, not a
+* **Raw errors become structured experiment data.** `ECONNREFUSED`, `TLS alert 42`,
+  `QUIC handshake timeout` — each becomes a typed `Result` value, not a
   debug print.
-* **Inference is evidence-first.** Findings carry confidence levels and
+* **Inference is experiment-first.** Findings carry confidence levels and
   reference the observations that support them. Fairy never claims "firewall
   blocked this" when all it knows is "TCP timed out."
 * **Policies control experiment selection.** `FastPolicy` walks a fixed tree;
@@ -83,10 +87,22 @@ Start with `docs/concepts.md` and `docs/experiment-model.md`.
 
 <br/>
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/fairy-survey-flow-dark.svg">
-  <img src="assets/fairy-survey-flow-light.svg" alt="Survey flow: Target URL → Policy → Experiments → Observations → Report" width="700">
-</picture>
+```mermaid
+flowchart LR
+    Target["Target URL"] --> Policy["Policy"]
+    Policy --> Exps["Experiments"]
+    Exps --> Obs["Observations"]
+    Obs --> Report["Report"]
+
+    subgraph Exps["Experiments"]
+        direction TB
+        DNS["DNS"] --> TCP["TCP"]
+        TCP --> TLS["TLS"]
+        TLS --> HTTP["HTTP"]
+        TCP --> UDP["UDP"]
+        UDP --> QUIC["QUIC"]
+    end
+```
 
 ---
 
@@ -98,7 +114,7 @@ fairysdk/
 ├── target.go
 ├── report.go
 ├── observation.go
-├── evidence.go
+├── result.go
 ├── state.go
 │
 ├── probe/
@@ -171,22 +187,22 @@ type Observation struct {
     Layer      Layer         `json:"layer"`
     Status     Status        `json:"status"`
     Duration   time.Duration `json:"duration"`
-    Evidence   []Evidence    `json:"evidence,omitempty"`
+    Results    []Result      `json:"results,omitempty"`
     Error      string        `json:"error,omitempty"`
 }
 ```
 
 Do **not** return raw errors as your diagnostic model. Convert them into
-structured evidence.
+structured experiment data.
 
 ```go
-type Evidence struct {
+type Result struct {
     Kind   string         `json:"kind"`
     Values map[string]any `json:"values,omitempty"`
 }
 ```
 
-Example evidence kinds:
+Example result kinds:
 
 ```text
 dns_answer
@@ -305,14 +321,14 @@ Captures: status, protocol, redirects, server headers, TTFB, total duration.
 ### UDP
 
 Uses `net.UDPConn`. V0 only needs basic reachability experiments against
-controlled endpoints. Returns `Unknown` where evidence is insufficient —
+controlled endpoints. Returns `Unknown` where experiment data is insufficient —
 do not pretend arbitrary UDP silence means "blocked."
 
 ### QUIC / HTTP/3
 
 Uses `github.com/quic-go/quic-go` and `github.com/quic-go/quic-go/http3`.
 
-Captures: UDP connectivity evidence, QUIC handshake result, QUIC version,
+Captures: UDP connectivity data, QUIC handshake result, QUIC version,
 ALPN, handshake duration, HTTP/3 response when applicable.
 
 Do not implement QUIC yourself.
@@ -341,6 +357,23 @@ No hidden mutation inside policies.
 ---
 
 ## Policies
+
+```mermaid
+flowchart TD
+    Start(["Survey requested"]) --> Fast["FastPolicy<br/>fixed tree"]
+    Start --> Adaptive["AdaptivePolicy<br/>hypothesis scoring"]
+    Start --> Factorial["FactorialPolicy<br/>Cartesian product"]
+    Start --> Taguchi["TaguchiPolicy<br/>orthogonal arrays"]
+
+    Fast --> Run["run()"]
+    Adaptive --> Run
+    Factorial --> Run
+    Taguchi --> Run
+
+    Run --> Obs["Observations"]
+    Obs --> Infer["Infer()"]
+    Infer --> Report(["Report"])
+```
 
 ### `FastPolicy`
 
@@ -409,7 +442,7 @@ func Infer(state SurveyState) []Finding
 type Finding struct {
     Kind       string     `json:"kind"`
     Confidence Confidence `json:"confidence"`
-    Evidence   []string   `json:"evidence"`
+    Results    []string   `json:"results"`
 }
 ```
 
@@ -432,10 +465,10 @@ Confidence levels:
 Confirmed
 Likely
 Possible
-InsufficientEvidence
+InsufficientData
 ```
 
-Evidence first. Interpretation second.
+Experiment data first. Interpretation second.
 
 ---
 
@@ -468,7 +501,7 @@ Finding:
   QUIC unavailable on this path
   Confidence: likely
 
-Evidence:
+Results:
   TCP/443 succeeds
   TLS over TCP succeeds
   UDP/443 QUIC handshake timed out
@@ -528,12 +561,9 @@ ID unless explicitly requested.
 
 Fairy knows nothing about VPN routing.
 
-```text
-FairySDK
-   |
-   | Report
-   v
-Phaethon
+```mermaid
+flowchart LR
+    Fairy["FairySDK"] -->|"Report"| Phaethon["Phaethon"]
 ```
 
 No reverse dependency. No MASQUE code inside Fairy.
@@ -602,7 +632,7 @@ deterministic `Report`. Then adaptive experiments.
 - [ ] UDP probe (basic)
 - [ ] FastPolicy
 - [ ] Basic AdaptivePolicy
-- [ ] Structured Evidence + Findings
+- [ ] Structured Results + Findings
 - [ ] JSON output
 - [ ] CLI (`cmd/fairy`)
 - [ ] Restartable `SurveyState`
@@ -619,8 +649,8 @@ inference. Details in ROADMAP.md.
 ## Design principles
 
 1. Experiments are deterministic — same inputs, same ID.
-2. Raw errors become structured evidence — never a debug print.
-3. Inference is evidence-first — confidence levels, not guesses.
+2. Raw errors become structured experiment data — never a debug print.
+3. Inference is experiment-first — confidence levels, not guesses.
 4. Policies are pure — no hidden mutation.
 5. A survey feels instant — tight time budgets by default.
 6. Fairy stays in its lane — it produces reports, not routing decisions.
@@ -628,22 +658,14 @@ inference. Details in ROADMAP.md.
 ## Name / inspiration
 
 FairySDK is named for the idea of a small, luminous scout — something that
-flies out, gathers what it finds, and comes back with evidence rather
-than opinions.
-
-<br/>
-
-<img src="assets/fairy-hero.png" alt="Bagboo — the FairySDK mascot" width="120" align="left" style="margin-right: 16px; border-radius: 12px;">
-
-The mascot is **Bagboo** — a small, bright creature that embodies the
-project's spirit: lightweight, evidence-first, and unafraid to fly into
-the unknown to find out what's really happening.
+flies out, gathers what it finds, and comes back with experiment data
+rather than opinions.
 
 > **Disclaimer.** FairySDK is an independent open-source project.
 
 ## Docs
 
-- `docs/concepts.md` — Target, Observation, Evidence, Finding, Experiment
+- `docs/concepts.md` — Target, Observation, Result, Finding, Experiment
 - `docs/experiment-model.md` — deterministic IDs, layers, survey state
 - `docs/probe-contract.md` — the `Probe` interface and implementation notes
 - `docs/policy-model.md` — `FastPolicy`, `AdaptivePolicy`, `FactorialPolicy`, `TaguchiPolicy`
