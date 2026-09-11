@@ -239,3 +239,57 @@ func TestEvidenceLinesReferenceExperiments(t *testing.T) {
 		}
 	}
 }
+
+// "No data of the requested type" (filtered AAAA, etc.) means the name
+// exists — that must not read as a confirmed NXDOMAIN.
+func TestDNSNoDataIsLikely(t *testing.T) {
+	s := buildState(t,
+		obsSpec{model.LayerDNS, "", model.Fail, []model.Evidence{{Kind: model.KindDNSError, Values: map[string]any{"rcode": "NOERROR", "note": "no data"}}}},
+	)
+	expectFindings(t, s, []string{KindDNSFailure})
+	if got := Infer(s)[0].Confidence; got != model.Likely {
+		t.Fatalf("nodata must stay likely, got %s", got)
+	}
+}
+
+// A certificate signed by an unknown authority on a path where TCP
+// works is the interception signature: tls_specific_failure stays
+// confirmed, and possible_proxy_interference must be reported.
+func TestTLSUnknownAuthoritySuggestsProxy(t *testing.T) {
+	s := buildState(t,
+		obsSpec{model.LayerDNS, "", model.Pass, nil},
+		obsSpec{model.LayerTCP, model.IPv4, model.Pass, nil},
+		obsSpec{model.LayerTLS, model.IPv4, model.Fail, []model.Evidence{{Kind: model.KindCertificate, Values: map[string]any{"type": "unknown_authority", "error": "x509: certificate signed by unknown authority"}}}},
+	)
+	got := kinds(Infer(s))
+	if !reflect.DeepEqual(got, []string{KindTLSSpecificFailure, KindPossibleProxyInterference}) {
+		t.Fatalf("findings = %v, want [tls_specific_failure possible_proxy_interference]", got)
+	}
+	if c := Infer(s)[1].Confidence; c != model.Possible {
+		t.Fatalf("interference must stay possible, got %s", c)
+	}
+}
+
+// Skipped observations mean "never probed" (prerequisite missing) and
+// must not become layer-failure findings.
+func TestSkippedObservationsAreNotFailures(t *testing.T) {
+	s := buildState(t,
+		obsSpec{model.LayerDNS, "", model.Pass, nil},
+		obsSpec{model.LayerTCP, model.IPv6, model.Skipped, []model.Evidence{{Kind: model.KindDNSError, Values: map[string]any{"error": "resolution failed"}}}},
+		obsSpec{model.LayerQUIC, model.IPv6, model.Skipped, []model.Evidence{{Kind: model.KindDNSError, Values: map[string]any{"error": "resolution failed"}}}},
+	)
+	if got := Infer(s); got != nil {
+		t.Fatalf("skipped layers must produce no findings, got %v", got)
+	}
+}
+
+// IPv6 unreachable where IPv4 works is the ipv6_path_failure signature —
+// including the "network is unreachable" flavor (Fail, not Unknown).
+func TestIPv6UnreachableFiresPathFailure(t *testing.T) {
+	s := buildState(t,
+		obsSpec{model.LayerDNS, "", model.Pass, nil},
+		obsSpec{model.LayerTCP, model.IPv4, model.Pass, nil},
+		obsSpec{model.LayerTCP, model.IPv6, model.Fail, []model.Evidence{{Kind: model.KindNetworkUnreachable}}},
+	)
+	expectFindings(t, s, []string{KindIPv6PathFailure})
+}

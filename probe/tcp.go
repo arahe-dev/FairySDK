@@ -50,6 +50,10 @@ func fillConnError(ctx context.Context, o *model.Observation, err error, start t
 		o.Status = model.Fail
 		o.Error = "connection refused"
 		o.AddEvidence(model.KindTCPRefused, nil)
+	case isUnreachable(err):
+		o.Status = model.Fail
+		o.Error = "network unreachable"
+		o.AddEvidence(model.KindNetworkUnreachable, nil)
 	case isReset(err):
 		o.Status = model.Fail
 		o.Error = "connection reset"

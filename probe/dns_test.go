@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
@@ -155,4 +156,119 @@ func TestDNSFamilyFilter(t *testing.T) {
 		t.Fatalf("missing v6 answers: %+v", ev.Values)
 	}
 	_ = errors.Is // keep errors import if assertions evolve
+}
+
+// fakeResolverAt swaps net.DefaultResolver for one whose queries are
+// served by the given local handler, and restores it on cleanup.
+func fakeResolverAt(t *testing.T, h dns.Handler) *net.Resolver {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &dns.Server{PacketConn: pc, Handler: h}
+	go func() { _ = srv.ActivateAndServe() }()
+	t.Cleanup(func() { _ = srv.Shutdown() })
+	addr := pc.LocalAddr().String()
+
+	r := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			return net.Dial(network, addr)
+		},
+	}
+	old := net.DefaultResolver
+	net.DefaultResolver = r
+	t.Cleanup(func() { net.DefaultResolver = old })
+	return r
+}
+
+// Regression: a resolver that answers A but returns "no data" for AAAA
+// must produce a passing, honest observation — never a false NXDOMAIN.
+// This is the shape seen on networks that filter AAAA records.
+func TestDNSSystemPerFamilyMerge(t *testing.T) {
+	fakeResolverAt(t, dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
+		m := new(dns.Msg)
+		m.SetReply(r)
+		if r.Question[0].Qtype == dns.TypeA {
+			m.Answer = append(m.Answer, &dns.A{
+				Hdr: dns.RR_Header{Name: r.Question[0].Name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60},
+				A:   net.IPv4(203, 0, 113, 7),
+			})
+		}
+		// AAAA: NOERROR with zero answers (filtered AAAA).
+		_ = w.WriteMsg(m)
+	}))
+	tgt := expTarget(t, "https://dualstack.test.invalid")
+	e := model.NewDNSExperiment(tgt, model.ResolverSystem)
+	o := (&DNS{}).Run(context.Background(), e)
+	if o.Status != model.Pass {
+		t.Fatalf("status = %s (%s), want pass (A records exist)", o.Status, o.Error)
+	}
+	ev, _ := o.FirstEvidenceOf(model.KindDNSAnswer)
+	v4, _ := model.AsStrings(ev.Values["v4"])
+	if len(v4) != 1 || v4[0] != "203.0.113.7" {
+		t.Fatalf("v4 = %v", v4)
+	}
+	if _, hasLabel := ev.Values["v6_error"]; !hasLabel {
+		t.Fatalf("missing v6_error label on filtered-AAAA network: %+v", ev.Values)
+	}
+}
+
+// Both families told "name does not exist" is the only shape that may
+// claim NXDOMAIN.
+func TestDNSSystemBothNXDOMAIN(t *testing.T) {
+	fakeResolverAt(t, dns.HandlerFunc(func(w dns.ResponseWriter, r *dns.Msg) {
+		m := new(dns.Msg)
+		m.SetRcode(r, dns.RcodeNameError)
+		_ = w.WriteMsg(m)
+	}))
+	tgt := expTarget(t, "https://gone.test.invalid")
+	e := model.NewDNSExperiment(tgt, model.ResolverSystem)
+	o := (&DNS{}).Run(context.Background(), e)
+	if o.Status != model.Fail {
+		t.Fatalf("status = %s, want fail", o.Status)
+	}
+	ev, _ := o.FirstEvidenceOf(model.KindDNSError)
+	if ev.Values["rcode"] != "NXDOMAIN" {
+		t.Fatalf("rcode = %v, want NXDOMAIN", ev.Values["rcode"])
+	}
+	if ev.Values["v4_error"] != "not_found" || ev.Values["v6_error"] != "not_found" {
+		t.Fatalf("family labels missing: %+v", ev.Values)
+	}
+}
+
+func TestMapDNSErrorCategories(t *testing.T) {
+	cases := []struct {
+		err  *net.DNSError
+		want string
+	}{
+		{&net.DNSError{Err: "no such host", IsNotFound: true}, "not_found"},
+		{&net.DNSError{Err: "getaddrinfow: The requested name is valid, but no data of the requested type was found."}, "no_data"},
+		{&net.DNSError{Err: "server misbehaving", IsTemporary: true}, "temporary"},
+		{&net.DNSError{Err: "i/o timeout", IsTimeout: true}, "timeout"},
+		{&net.DNSError{Err: "something odd"}, "error"},
+	}
+	for i, tc := range cases {
+		if got := mapDNSError(tc.err); got != tc.want {
+			t.Errorf("case %d: mapDNSError = %q, want %q", i, got, tc.want)
+		}
+	}
+}
+
+// Regression: LookupNetIP surfaces IPv4 literals (and some platform
+// resolver answers) in 4-in-6 form; they must still count as IPv4.
+func TestFamilyAddrsUnmapsIPv4InIPv6(t *testing.T) {
+	literal := netip.MustParseAddr("::ffff:127.0.0.1")
+	pure4 := netip.MustParseAddr("192.0.2.1")
+	pure6 := netip.MustParseAddr("2001:db8::1")
+
+	v4 := familyAddrs([]netip.Addr{literal, pure4, pure6}, model.IPv4)
+	if len(v4) != 2 || v4[0] != "127.0.0.1" || v4[1] != "192.0.2.1" {
+		t.Fatalf("v4 = %v, want [127.0.0.1 192.0.2.1]", v4)
+	}
+	v6 := familyAddrs([]netip.Addr{literal, pure4, pure6}, model.IPv6)
+	if len(v6) != 1 || v6[0] != "2001:db8::1" {
+		t.Fatalf("v6 = %v, want [2001:db8::1]", v6)
+	}
 }

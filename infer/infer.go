@@ -74,7 +74,7 @@ func Infer(state model.SurveyState) []model.Finding {
 	// DNS failure short-circuits the rest: nothing downstream is meaningful.
 	if dns != nil && dns.Status != model.Pass {
 		conf := model.Likely
-		if dns.Status == model.Fail {
+		if rcode := dnsRcode(dns); rcode == "NXDOMAIN" || rcode == "SERVFAIL" {
 			conf = model.Confirmed
 		}
 		add(KindDNSFailure, conf, dns)
@@ -131,15 +131,24 @@ func Infer(state model.SurveyState) []model.Finding {
 			conf = model.Confirmed
 		}
 		add(KindTLSSpecificFailure, conf, tcp, tls)
-		// A mid-handshake reset with no TLS alert is the classic
-		// interception signature — still only "possible".
+		// A mid-handshake reset with no TLS alert, or a certificate
+		// signed by an authority the system does not know, are the two
+		// classic interception signatures — still only "possible":
+		// both have innocent explanations (broken server, expired
+		// misconfigured certificate).
 		if _, ok := tls.FirstEvidenceOf(model.KindTCPReset); ok {
 			add(KindPossibleProxyInterference, model.Possible, tcp, tls)
 		}
+		if ev, ok := tls.FirstEvidenceOf(model.KindCertificate); ok {
+			if ev.Values["type"] == "unknown_authority" {
+				add(KindPossibleProxyInterference, model.Possible, tcp, tls)
+			}
+		}
 	}
 
-	// UDP transport.
-	if udp := pick(state, model.LayerUDP, ""); udp != nil && udp.Status != model.Pass {
+	// UDP transport. Skipped observations mean "never probed" (a
+	// prerequisite was missing), which is not evidence of failure.
+	if udp := pick(state, model.LayerUDP, ""); udp != nil && udp.Status != model.Pass && udp.Status != model.Skipped {
 		conf := model.Possible
 		if udp.Status == model.Fail {
 			conf = model.Confirmed
@@ -148,7 +157,7 @@ func Infer(state model.SurveyState) []model.Finding {
 	}
 
 	// QUIC unavailable.
-	if quic := pick(state, model.LayerQUIC, ""); quic != nil && quic.Status != model.Pass {
+	if quic := pick(state, model.LayerQUIC, ""); quic != nil && quic.Status != model.Pass && quic.Status != model.Skipped {
 		conf := model.Possible
 		if tcpPassAny {
 			conf = model.Likely
@@ -184,6 +193,16 @@ func Infer(state model.SurveyState) []model.Finding {
 		add(KindPathHealthy, model.Confirmed, supporting...)
 	}
 	return out
+}
+
+// dnsRcode extracts the rcode label from DNS error evidence, if present.
+func dnsRcode(o *model.Observation) string {
+	ev, ok := o.FirstEvidenceOf(model.KindDNSError)
+	if !ok {
+		return ""
+	}
+	rc, _ := ev.Values["rcode"].(string)
+	return rc
 }
 
 // pick returns the most recent observation for a layer and (optionally)

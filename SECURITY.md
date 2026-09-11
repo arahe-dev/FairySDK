@@ -2,7 +2,7 @@
 
 ## Supported Versions
 
-FairySDK v0.1.0-pre is in early development and receives security fixes
+FairySDK v0.1.0 is the current release and receives security fixes
 as they are identified.
 
 ## Reporting a vulnerability

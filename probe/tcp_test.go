@@ -3,6 +3,7 @@ package probe
 import (
 	"context"
 	"strconv"
+	"syscall"
 	"net"
 	"testing"
 	"time"
@@ -89,5 +90,20 @@ func TestTCPDurationRecorded(t *testing.T) {
 	}
 	if o.Duration > time.Second {
 		t.Fatalf("connect took %v, too slow for loopback", o.Duration)
+	}
+}
+
+// Regression: the kernel stating "network is unreachable" is definitive
+// evidence (Status Fail with network_unreachable), never Unknown. This
+// is what an IPv6-capable DNS answer on a v4-only path produces.
+func TestTCPNetworkUnreachableIsFail(t *testing.T) {
+	err := &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ENETUNREACH}
+	o := model.NewObservation(model.Experiment{Layer: model.LayerTCP}, model.Unknown, 0)
+	fillConnError(context.Background(), &o, err, time.Now())
+	if o.Status != model.Fail {
+		t.Fatalf("status = %s, want fail", o.Status)
+	}
+	if _, ok := o.FirstEvidenceOf(model.KindNetworkUnreachable); !ok {
+		t.Fatalf("missing network_unreachable evidence: %+v", o.Evidence)
 	}
 }

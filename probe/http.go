@@ -15,7 +15,7 @@ import (
 )
 
 // UserAgent is sent by HTTP probes.
-const UserAgent = "fairy/0.1 (+https://github.com/arahe-dev/fairy)"
+const UserAgent = "fairy/0.1.0 (+https://github.com/arahe-dev/fairy)"
 
 // maxHTTPBodyRead bounds how much of a response body is drained to time
 // the full transfer.

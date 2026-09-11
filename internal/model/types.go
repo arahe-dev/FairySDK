@@ -187,6 +187,7 @@ const (
 	KindTCPConnect           = "tcp_connect"
 	KindTCPRefused           = "tcp_refused"
 	KindTCPReset             = "tcp_reset"
+	KindNetworkUnreachable   = "network_unreachable"
 	KindTLSAlert             = "tls_alert"
 	KindTLSVersion           = "tls_version"
 	KindCipherSuite          = "cipher_suite"

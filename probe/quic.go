@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"net"
 	"net/http"
 	"time"
@@ -134,6 +135,12 @@ func fillQUICError(o *model.Observation, err error) {
 		o.Status = model.Fail
 		o.Error = "udp port unreachable"
 		o.AddEvidence(model.KindUDPRefused, nil)
+	case isUnreachable(err) || strings.Contains(err.Error(), "unreachable"):
+		// quic-go wraps route errors in a local INTERNAL_ERROR, hiding
+		// the errno from errors.As; the message is still definitive.
+		o.Status = model.Fail
+		o.Error = "network unreachable (no route)"
+		o.AddEvidence(model.KindNetworkUnreachable, nil)
 	case errors.As(err, &vn):
 		o.Status = model.Fail
 		o.Error = "quic version negotiation failed"

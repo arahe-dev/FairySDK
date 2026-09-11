@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.1.0-pre (unreleased)
+## v0.1.0
 
 - Initial project structure.
 - README, LICENSE, and community files.
@@ -27,4 +27,17 @@
 - Test suite: local fake DNS/TCP/TLS/HTTP/HTTP-3 servers, policy
   determinism, resume, duplicate rejection, context cancellation, and
   inference fixtures.
-- Implementation underway.
+- Validation fixes (real-network testing on two networks, Windows + WSL Linux):
+  - DNS: address families are resolved separately and failures carry honest
+    per-family labels (not_found / no_data / temporary / timeout), so
+    AAAA-filtered networks no longer masquerade as NXDOMAIN; IPv4 literal
+    addresses surfaced as 4-in-6 are counted.
+  - Inference: dns_failure is confirmed only for NXDOMAIN/SERVFAIL;
+    "no data" stays likely.
+  - Inference: a certificate signed by an unknown authority on a path where
+    TCP works now reports possible_proxy_interference.
+  - Inference: skipped observations (prerequisite missing) no longer produce
+    layer-failure findings.
+  - TCP/UDP/QUIC: kernel "network unreachable" verdicts report Fail with
+    network_unreachable evidence instead of Unknown, so ipv6_path_failure
+    fires on v4-only paths.

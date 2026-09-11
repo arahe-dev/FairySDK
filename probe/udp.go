@@ -62,6 +62,10 @@ func (p *UDP) Run(ctx context.Context, e model.Experiment) model.Observation {
 			o.Status = model.Fail
 			o.Error = "udp port unreachable"
 			o.AddEvidence(model.KindUDPRefused, map[string]any{"port": int(e.Target.Port)})
+		case isUnreachable(err):
+			o.Status = model.Fail
+			o.Error = "network unreachable (no route)"
+			o.AddEvidence(model.KindNetworkUnreachable, nil)
 		case isTimeout(err) || isCanceled(err):
 			o.Status = model.Timeout
 			o.Error = "no udp response"

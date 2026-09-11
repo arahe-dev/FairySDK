@@ -104,7 +104,26 @@ func isCanceled(err error) bool {
 const (
 	wsaConnRefused = syscall.Errno(10061)
 	wsaConnReset   = syscall.Errno(10054)
+	wsaNetDown     = syscall.Errno(10050)
+	wsaNetUnreach  = syscall.Errno(10051)
+	wsaHostUnreach = syscall.Errno(10065)
 )
+
+// isUnreachable reports "no route" verdicts from the OS kernel
+// (ENETUNREACH / EHOSTUNREACH / ENETDOWN). The kernel stating "no route"
+// is definitive evidence for this machine and network — not
+// insufficient evidence — so it becomes Status Fail.
+func isUnreachable(err error) bool {
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		switch errno {
+		case syscall.ENETUNREACH, syscall.EHOSTUNREACH, syscall.ENETDOWN,
+			wsaNetUnreach, wsaHostUnreach, wsaNetDown:
+			return true
+		}
+	}
+	return false
+}
 
 // isRefused reports ECONNREFUSED (nothing listening / actively refused).
 func isRefused(err error) bool {
