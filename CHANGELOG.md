@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.1
+
+- Fix: `cmd/fairy` (the CLI) was missing from v0.1.0 - an unanchored
+  `.gitignore` entry intended for the built binary also excluded the
+  `cmd/fairy/` source directory. Ignore rules are now anchored to the
+  repository root.
+- `go.mod` retracts v0.1.0: install v0.1.1 or later.
+
 ## v0.1.0
 
 - Initial project structure.

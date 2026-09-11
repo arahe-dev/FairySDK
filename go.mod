@@ -2,9 +2,15 @@ module github.com/arahe-dev/fairy
 
 go 1.27.1
 
+// v0.1.0 was published without the CLI: an unanchored ".gitignore" entry
+// for the built binary also excluded the cmd/fairy/ source directory, so
+// that version contains no installable command. Use v0.1.1 or later.
+retract v0.1.0
+
 require (
 	github.com/miekg/dns v1.1.62
 	github.com/quic-go/quic-go v0.48.2
+	golang.org/x/sync v0.8.0
 )
 
 require (
@@ -17,7 +23,6 @@ require (
 	golang.org/x/exp v0.0.0-20240506185415-9bf2ced13842 // indirect
 	golang.org/x/mod v0.18.0 // indirect
 	golang.org/x/net v0.28.0 // indirect
-	golang.org/x/sync v0.8.0 // indirect
 	golang.org/x/sys v0.23.0 // indirect
 	golang.org/x/text v0.17.0 // indirect
 	golang.org/x/tools v0.22.0 // indirect

@@ -27,8 +27,9 @@ go.work
 .DS_Store
 Thumbs.db
 
-# Project-specific
-fairy
-fairy.exe
-state.json
+# Project-specific build artifacts (anchored: an unanchored "fairy" would
+# also ignore the cmd/fairy/ source directory)
+/fairy
+/fairy.exe
+/state.json
 dist/

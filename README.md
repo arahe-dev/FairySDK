@@ -14,7 +14,7 @@
 **Controlled network experiments. Experiment data. Path failure diagnosis.**
 
 [![Go](https://img.shields.io/badge/Go-%3E%3D1.27.1-00ADD8?logo=go&logoColor=white)](https://golang.org/)
-[![status](https://img.shields.io/badge/status-v0.1.0-brightgreen)](https://github.com/arahe-dev/fairy)
+[![status](https://img.shields.io/badge/status-v0.1.1-brightgreen)](https://github.com/arahe-dev/fairy)
 [![license](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 
 </div>
@@ -28,7 +28,7 @@ experiments** against a target and returns a structured `Report` of what
 happened — and, more importantly, **where the path fails** and **what the
 experiment data supports**.
 
-> **Status.** FairySDK **v0.1.0** is implemented: `Survey(ctx, url)`,
+> **Status.** FairySDK **v0.1.1** is implemented: `Survey(ctx, url)`,
 > the advanced `New(Config)` constructor, all six probes, the four
 > policies, structured experiment data, findings, JSON output, the CLI,
 > and restartable `SurveyState`. Dependencies are fixed (see go.mod).
@@ -438,7 +438,7 @@ fairy survey https://example.com --json
 
 ## Current status
 
-v0.1.0 — implemented and race-clean (`go test -race ./...`), release
+v0.1.1 — implemented and race-clean (`go test -race ./...`), release
 pending. `fairy survey https://example.com` returns structured results
 from DNS, TCP, TLS, HTTP, UDP, and QUIC with a deterministic `Report`.
 
@@ -453,7 +453,7 @@ from DNS, TCP, TLS, HTTP, UDP, and QUIC with a deterministic `Report`.
 - [x] JSON output + CLI
 - [x] Restartable `SurveyState`
 - [x] `go test -race ./...` clean
-- [x] v0.1.0 release
+- [x] v0.1.1 release
 - [x] FactorialPolicy, TaguchiPolicy
 
 Non-goals for V0: packet capture, eBPF, traceroute, raw ICMP, DoH, DoT,

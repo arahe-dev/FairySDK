@@ -16,7 +16,7 @@
 - [x] CLI (`cmd/fairy`)
 - [x] Restartable `SurveyState` (JSON persistence)
 - [x] `go test -race ./...` clean
-- [x] v0.1.0 release
+- [x] v0.1.1 release
 
 ## Post-V0
 
