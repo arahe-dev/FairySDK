@@ -1,5 +1,25 @@
 # Changelog
 
+## v0.2.0
+
+Agent-facing CLI additions (Go SDK API unchanged):
+
+- `fairy batch <targets-file> --out DIR [--jsonl FILE] [--runs N] [--jobs N]`:
+  surveys many targets, writes one report per target plus a saved
+  `SurveyState`, streams one compact JSON object per run to JSONL, and
+  reports per-target failures with a non-zero exit code.
+- `fairy compare <setA> <setB> [--json]`: diffs two report sets (one per
+  network) — observation status/detail changes, hosts present in only one
+  set, finding changes, and instability within a set when multiple runs of
+  a host disagree. Sets may be directories, single reports, or `.jsonl`.
+- Every machine-readable report now carries run metadata: `schema_version`,
+  `fairy_version`, `run_id`, `network_label`, `policy`, `wall_ms`, and the
+  report fields stay at the top level for existing consumers.
+- Fix (found by `fairy compare` on real adaptive-policy data): inference
+  preferred the most recent observation of a layer, so a passing adaptive
+  variant (e.g. SNI-less TLS) could mask the failing canonical experiment
+  and suppress `tls_specific_failure` / `possible_proxy_interference`.
+  Layer verdicts now prefer the canonical experiment.
 ## v0.1.1
 
 - Fix: `cmd/fairy` (the CLI) was missing from v0.1.0 - an unanchored

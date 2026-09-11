@@ -1,9 +1,9 @@
 // Command fairy is the FairySDK CLI.
 //
 //	fairy survey https://example.com
-//	fairy survey https://example.com --json
-//	fairy survey https://example.com --policy adaptive --save state.json
-//	fairy survey --resume state.json --save state.json
+//	fairy survey https://example.com --json --save state.json
+//	fairy batch targets.txt --out reports/work --jsonl work.jsonl --policy adaptive
+//	fairy compare reports/work reports/hotspot --json
 package main
 
 import (
@@ -13,7 +13,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -33,6 +32,10 @@ func run(args []string) int {
 	switch args[0] {
 	case "survey":
 		return runSurvey(args[1:])
+	case "batch":
+		return runBatch(args[1:])
+	case "compare":
+		return runCompare(args[1:])
 	case "version", "--version", "-v":
 		fmt.Println("fairy " + version.Version)
 		return 0
@@ -50,192 +53,154 @@ func usage(w io.Writer) {
 	fmt.Fprint(w, `fairy — controlled network experiments
 
 Usage:
-  fairy survey <url> [flags]
+  fairy survey <url> [flags]              one target: observe, infer, report
+  fairy batch <targets-file> [flags]      many targets: run, save, stream JSONL
+  fairy compare <setA> <setB> [flags]     diff two report sets (one per network)
   fairy version
 
 Exit codes:
-  0  survey completed (findings are report data, not errors)
-  1  survey could not complete
+  0  the command completed (findings and differences are report data, not errors)
+  1  a survey or comparison could not complete
   2  usage error
 
-Survey flags:
-  --json              print the report as JSON
+Survey flags (also accepted by batch):
+  --json              print the report as JSON, with run metadata
   --policy NAME       fast | adaptive | factorial | taguchi  (default: fast)
-  --timeout DUR       whole-survey time budget              (default: 10s)
-  --max-probes N      maximum number of experiments         (default: 16)
-  --concurrency N     maximum concurrent probes             (default: 4)
+  --timeout DUR       whole-survey time budget per target    (default: 10s)
+  --max-probes N      maximum number of experiments          (default: 16)
+  --concurrency N     maximum concurrent probes in a survey  (default: 4)
   --insecure          skip TLS certificate verification
+  --network-label L   label the network being observed (metadata only)
   --resume FILE       resume a saved SurveyState (target comes from the state)
   --save FILE         save the final SurveyState as JSON
+
+Batch flags:
+  --out DIR           directory for one report JSON per target (required)
+  --jsonl FILE        one JSON object per run ("-" streams to stdout)
+  --runs N            runs per target                        (default: 1)
+  --jobs N            targets surveyed in parallel           (default: 1)
+
+Compare flags:
+  --json              print the comparison as JSON
+
+Targets file format (one per line):
+  https://example.com
+  api-example https://api.example.com
 `)
 }
 
+type surveyFlags struct {
+	flagSet *flag.FlagSet
+	fairyFlags
+	jsonOut bool
+	resume  string
+	save    string
+}
+
+func newSurveyFlags() *surveyFlags {
+	sf := &surveyFlags{}
+	fs := flag.NewFlagSet("fairy survey", flag.ContinueOnError)
+	sf.fairyFlags.register(fs)
+	fs.BoolVar(&sf.jsonOut, "json", false, "print the report as JSON")
+	fs.StringVar(&sf.resume, "resume", "", "resume from a saved SurveyState JSON file")
+	fs.StringVar(&sf.save, "save", "", "save the final SurveyState as JSON")
+	sf.flagSet = fs
+	fs.SetOutput(os.Stderr)
+	return sf
+}
+
 func runSurvey(args []string) int {
-	fs := newSurveyFlags()
-	// Go's flag package stops parsing at the first positional argument,
-	// but users naturally write `fairy survey URL --json`. Split flags
-	// from positionals so flags are accepted in any position.
-	flagArgs, positional := splitArgs(args, boolFlags)
-	if err := fs.flagSet.Parse(flagArgs); err != nil {
+	sf := newSurveyFlags()
+	if err := sf.flagSet.Parse(reorderFlags(args)); err != nil {
 		return 2
 	}
-	if len(positional) < 1 && fs.resume == "" {
+	operands := positionalArgs(args)
+	if len(operands) < 1 && sf.resume == "" {
 		fmt.Fprintln(os.Stderr, "fairy survey: target URL required (or --resume FILE)")
 		return 2
 	}
 	target := ""
-	if len(positional) > 0 {
-		target = positional[0]
-	}
-	pol, err := policyByName(fs.policy)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "fairy survey:", err)
-		return 2
+	if len(operands) > 0 {
+		target = operands[0]
 	}
 
-	f, err := fairy.New(fairy.Config{
-		Policy:                pol,
-		MaxProbes:             fs.maxProbes,
-		Timeout:               fs.timeout,
-		MaxConcurrent:         fs.concurrency,
-		TLSInsecureSkipVerify: fs.insecure,
-	})
+	f, err := sf.newFairy()
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "fairy:", err)
+		fmt.Fprintln(os.Stderr, "fairy survey:", err)
 		return 2
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	started := time.Now()
 	var report *fairy.Report
-	if fs.resume != "" {
-		raw, err := os.ReadFile(fs.resume)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "fairy: resume:", err)
+	if sf.resume != "" {
+		raw, rerr := os.ReadFile(sf.resume)
+		if rerr != nil {
+			fmt.Fprintln(os.Stderr, "fairy: resume:", rerr)
 			return 1
 		}
-		state, err := fairy.LoadState(raw)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "fairy:", err)
+		state, lerr := fairy.LoadState(raw)
+		if lerr != nil {
+			fmt.Fprintln(os.Stderr, "fairy:", lerr)
 			return 1
 		}
 		if target != "" {
 			fmt.Fprintln(os.Stderr, "fairy: note: target URL ignored; --resume uses the state's target")
 		}
 		report, err = f.Resume(ctx, state)
-		if report == nil {
-			fmt.Fprintln(os.Stderr, "fairy:", err)
-			return 1
-		}
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "fairy:", err)
-		}
 	} else {
-		var err error
 		report, err = f.Survey(ctx, target)
-		if report == nil {
-			fmt.Fprintln(os.Stderr, "fairy:", err)
-			return 1
-		}
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "fairy:", err)
-		}
+	}
+	wall := time.Since(started)
+	if report == nil {
+		fmt.Fprintln(os.Stderr, "fairy:", err)
+		return 1
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "fairy:", err)
+	}
+	if target == "" && report.Target.Host != "" {
+		target = report.Target.String()
 	}
 
-	if fs.save != "" {
+	if sf.save != "" {
 		if report.State == nil {
 			fmt.Fprintln(os.Stderr, "fairy: report carries no state to save")
 			return 1
 		}
-		raw, err := fairy.SaveState(*report.State)
-		if err == nil {
-			err = os.WriteFile(fs.save, raw, 0o644)
+		raw, serr := fairy.SaveState(*report.State)
+		if serr == nil {
+			serr = os.WriteFile(sf.save, raw, 0o644)
 		}
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "fairy: save:", err)
+		if serr != nil {
+			fmt.Fprintln(os.Stderr, "fairy: save:", serr)
 			return 1
 		}
 	}
 
-	if fs.json {
-		if err := fairy.RenderReportJSON(os.Stdout, report); err != nil {
-			fmt.Fprintln(os.Stderr, "fairy:", err)
+	meta := runMetadata{
+		SchemaVersion: schemaVersion,
+		FairyVersion:  version.Version,
+		RunID:         newRunID(),
+		NetworkLabel:  sf.label,
+		Slug:          slugFor(target),
+		TargetURL:     target,
+		RunIndex:      1,
+		Policy:        sf.policy,
+		WallMS:        wall.Milliseconds(),
+	}
+	if sf.jsonOut {
+		if werr := writeReportJSON(os.Stdout, report, meta); werr != nil {
+			fmt.Fprintln(os.Stderr, "fairy:", werr)
 			return 1
 		}
-	} else if err := fairy.RenderReport(os.Stdout, report); err != nil {
-		fmt.Fprintln(os.Stderr, "fairy:", err)
+		return 0
+	}
+	if werr := fairy.RenderReport(os.Stdout, report); werr != nil {
+		fmt.Fprintln(os.Stderr, "fairy:", werr)
 		return 1
 	}
 	return 0
-}
-
-// boolFlags are survey flags that take no value.
-var boolFlags = map[string]bool{"json": true, "insecure": true, "h": true, "help": true}
-
-// splitArgs separates flag tokens (including their values) from
-// positional arguments so flags work before and after positionals.
-func splitArgs(args []string, noValue map[string]bool) (flagArgs, positional []string) {
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		if len(a) < 2 || a[0] != '-' {
-			positional = append(positional, a)
-			continue
-		}
-		if strings.Contains(a, "=") {
-			flagArgs = append(flagArgs, a)
-			continue
-		}
-		name := strings.TrimLeft(a, "-")
-		flagArgs = append(flagArgs, a)
-		if !noValue[name] && i+1 < len(args) {
-			flagArgs = append(flagArgs, args[i+1])
-			i++
-		}
-	}
-	return flagArgs, positional
-}
-
-type surveyFlags struct {
-	flagSet     *flag.FlagSet
-	json        bool
-	policy      string
-	timeout     time.Duration
-	maxProbes   int
-	concurrency int
-	insecure    bool
-	resume      string
-	save        string
-}
-
-// policyByName maps a CLI policy name onto the built-in policy.
-func policyByName(name string) (fairy.Policy, error) {
-	switch name {
-	case "fast":
-		return fairy.Fast, nil
-	case "adaptive":
-		return fairy.Adaptive, nil
-	case "factorial":
-		return fairy.Factorial, nil
-	case "taguchi":
-		return fairy.Taguchi, nil
-	default:
-		return nil, fmt.Errorf("unknown policy %q (want fast, adaptive, factorial or taguchi)", name)
-	}
-}
-
-func newSurveyFlags() *surveyFlags {
-	sf := &surveyFlags{}
-	fs := flag.NewFlagSet("fairy survey", flag.ContinueOnError)
-	fs.BoolVar(&sf.json, "json", false, "print the report as JSON")
-	fs.StringVar(&sf.policy, "policy", "fast", "fast | adaptive | factorial | taguchi")
-	fs.DurationVar(&sf.timeout, "timeout", 10*time.Second, "whole-survey time budget")
-	fs.IntVar(&sf.maxProbes, "max-probes", 16, "maximum number of experiments")
-	fs.IntVar(&sf.concurrency, "concurrency", 4, "maximum concurrent probes")
-	fs.BoolVar(&sf.insecure, "insecure", false, "skip TLS certificate verification")
-	fs.StringVar(&sf.resume, "resume", "", "resume from a saved SurveyState JSON file")
-	fs.StringVar(&sf.save, "save", "", "save the final SurveyState as JSON")
-	sf.flagSet = fs
-	fs.SetOutput(os.Stderr)
-	return sf
 }

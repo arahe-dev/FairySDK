@@ -293,3 +293,37 @@ func TestIPv6UnreachableFiresPathFailure(t *testing.T) {
 	)
 	expectFindings(t, s, []string{KindIPv6PathFailure})
 }
+
+// Regression: an adaptive follow-up variant that passes must not mask the
+// failing canonical experiment of the same layer. Found by comparing
+// adaptive-policy runs with `fairy compare` on a real network.
+func TestVariantPassDoesNotMaskCanonicalFailure(t *testing.T) {
+	target := tgt(t)
+	canonical := model.NewTLSExperiment(target, model.IPv4, "", "")
+	variant := model.NewTLSExperiment(target, model.IPv4, "", model.SNINone)
+	if canonical.ID == variant.ID {
+		t.Fatal("test needs distinct experiments")
+	}
+	s := model.SurveyState{SurveyID: "t", Target: &target}
+	tcp := model.NewTCPExperiment(target, model.IPv4)
+	_ = s.AddObservation(passObsFor(tcp))
+	_ = s.AddObservation(failObsFor(canonical, model.Evidence{Kind: model.KindCertificate, Values: map[string]any{"type": "unknown_authority"}}))
+	// The SNI-less variant is recorded later and passed.
+	_ = s.AddObservation(passObsFor(variant))
+
+	got := kinds(Infer(s))
+	if !reflect.DeepEqual(got, []string{KindTLSSpecificFailure, KindPossibleProxyInterference}) {
+		t.Fatalf("findings = %v, want canonical TLS failure to survive variant passes", got)
+	}
+}
+
+func passObsFor(e model.Experiment) model.Observation {
+	return model.NewObservation(e, model.Pass, 5*time.Millisecond)
+}
+
+func failObsFor(e model.Experiment, evidence ...model.Evidence) model.Observation {
+	o := model.NewObservation(e, model.Fail, 5*time.Millisecond)
+	o.Evidence = evidence
+	o.Error = "synthetic failure"
+	return o
+}

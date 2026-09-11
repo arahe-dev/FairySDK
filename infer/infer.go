@@ -205,9 +205,14 @@ func dnsRcode(o *model.Observation) string {
 	return rc
 }
 
-// pick returns the most recent observation for a layer and (optionally)
-// address family.
+// pick returns the preferred observation for a layer and (optionally)
+// address family. The canonical (default-variant) experiment wins over
+// later follow-up variants: an adaptive SNI/ALPN variant that happens to
+// pass must not erase the verdict of the default experiment, and a
+// variant that fails must not be reported as the layer's normal result.
+// Without a canonical observation the most recent one is used.
 func pick(state model.SurveyState, layer model.Layer, family model.IPFamily) *model.Observation {
+	var fallback *model.Observation
 	for i := len(state.Observations) - 1; i >= 0; i-- {
 		o := &state.Observations[i]
 		if o.Layer != layer {
@@ -216,9 +221,34 @@ func pick(state model.SurveyState, layer model.Layer, family model.IPFamily) *mo
 		if family != "" && o.Experiment.IPFamily != family {
 			continue
 		}
-		return o
+		if isCanonicalExperiment(o.Experiment) {
+			return o
+		}
+		if fallback == nil {
+			fallback = o
+		}
 	}
-	return nil
+	return fallback
+}
+
+// isCanonicalExperiment reports whether an experiment is the default
+// variant for its layer, i.e. the one an ordinary tree survey runs:
+// system resolver for DNS, no SNI/ALPN overrides for TCP/TLS/HTTP, and
+// the standard h3 ALPN for QUIC.
+func isCanonicalExperiment(e model.Experiment) bool {
+	if e.SNI != "" {
+		return false
+	}
+	switch e.Layer {
+	case model.LayerDNS:
+		return e.Resolver == model.ResolverSystem || e.Resolver == ""
+	case model.LayerTLS, model.LayerHTTP, model.LayerTCP:
+		return e.ALPN == ""
+	case model.LayerQUIC:
+		return e.ALPN == "" || e.ALPN == "h3"
+	default:
+		return e.ALPN == ""
+	}
 }
 
 func layerObs(state model.SurveyState, layer model.Layer) []model.Observation {

@@ -81,6 +81,7 @@ flowchart LR
 - [Restartability](#restartability)
 - [Phaethon boundary](#phaethon-boundary)
 - [Quickstart](#quickstart)
+- [Batch and compare](#batch-and-compare)
 - [Current status](#current-status)
 - [Roadmap](#roadmap)
 - [Design principles](#design-principles)
@@ -436,6 +437,45 @@ fairy survey https://example.com --json
 
 ---
 
+## Batch and compare
+
+Diagnosing a network means many targets, several networks, and one
+comparison. The SDK API stays as small as it was; two CLI commands cover
+the bulk workflow:
+
+```bash
+# one targets file per campaign; one output directory per network
+fairy batch targets.txt --out reports/work --jsonl work.jsonl --policy adaptive
+
+# same targets, another network
+fairy batch targets.txt --out reports/hotspot --jsonl hotspot.jsonl --policy adaptive
+
+# what actually differs between the two paths?
+fairy compare reports/work reports/hotspot --json
+```
+
+`batch` owns per-target concurrency, deterministic file names, saved
+`SurveyState`s, run metadata and error accounting. `compare` reports
+observation status/detail changes, hosts present in only one set, finding
+changes, and instability when repeated runs of a host disagree.
+
+Every machine-readable output carries run metadata:
+
+```json
+{
+  "schema_version": 1,
+  "run": {
+    "fairy_version": "0.2.0",
+    "run_id": "9f2c1ab73d05",
+    "network_label": "work",
+    "policy": "adaptive",
+    "wall_ms": 5240
+  },
+  "target": { "url": "https://vercel.com:443", "host": "vercel.com", "port": 443 },
+  "observations": [ ... ],
+  "findings": [ ... ]
+}
+```
 ## Current status
 
 v0.1.1 — implemented and race-clean (`go test -race ./...`), release
