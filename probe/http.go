@@ -12,10 +12,11 @@ import (
 	"time"
 
 	"github.com/arahe-dev/fairy/internal/model"
+	"github.com/arahe-dev/fairy/internal/version"
 )
 
 // UserAgent is sent by HTTP probes.
-const UserAgent = "fairy/0.1.0 (+https://github.com/arahe-dev/fairy)"
+const UserAgent = version.UserAgent
 
 // maxHTTPBodyRead bounds how much of a response body is drained to time
 // the full transfer.

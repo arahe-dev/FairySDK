@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/arahe-dev/fairy"
+	"github.com/arahe-dev/fairy/internal/version"
 )
 
 func main() {
@@ -33,7 +34,7 @@ func run(args []string) int {
 	case "survey":
 		return runSurvey(args[1:])
 	case "version", "--version", "-v":
-		fmt.Println("fairy 0.1.0")
+		fmt.Println("fairy " + version.Version)
 		return 0
 	case "help", "--help", "-h":
 		usage(os.Stdout)
