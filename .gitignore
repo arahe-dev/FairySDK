@@ -29,4 +29,6 @@ Thumbs.db
 
 # Project-specific
 fairy
+fairy.exe
+state.json
 dist/

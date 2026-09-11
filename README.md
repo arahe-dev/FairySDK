@@ -7,7 +7,7 @@
 
 <br/>
 
-<img src="assets/fairy-hero.png" alt="FairySDK" width="88" style="border-radius: 18px;">
+<img src="assets/fairy-hero.png" alt="FairySDK" width="88">
 
 <br/>
 
@@ -28,11 +28,10 @@ experiments** against a target and returns a structured `Report` of what
 happened — and, more importantly, **where the path fails** and **what the
 experiment data supports**.
 
-> **Status.** FairySDK **v0.1.0-pre** is in early development. The public
-> API is stabilizing: `Survey(ctx, url)` and the advanced `New(Config)`
-> constructor. Dependencies are fixed — see below. Everything below is the
-> target spec; not all of it is implemented yet. See ROADMAP.md and
-> CHANGELOG.md.
+> **Status.** FairySDK **v0.1.0-pre** is implemented: `Survey(ctx, url)`,
+> the advanced `New(Config)` constructor, all six probes, the four
+> policies, structured experiment data, findings, JSON output, the CLI,
+> and restartable `SurveyState`. Dependencies are fixed (see go.mod).
 
 ---
 
@@ -46,7 +45,7 @@ a `Report` with findings and confidence levels.
 * **Experiments are deterministic.** Same inputs — same experiment ID. That
   gives deduplication, restartability, and reproducibility for free.
 * **Raw errors become structured experiment data.** `ECONNREFUSED`, `TLS alert 42`,
-  `QUIC handshake timeout` — each becomes a typed `Result` value, not a
+  `QUIC handshake timeout` — each becomes a typed `Evidence` value, not a
   debug print.
 * **Inference is experiment-first.** Findings carry confidence levels and
   reference the observations that support them. Fairy never claims "firewall
@@ -67,6 +66,7 @@ flowchart LR
 
 ## Contents
 
+- [What is FairySDK?](#what-is-fairysdk)
 - [Repository shape](#repository-shape)
 - [Core types](#core-types)
 - [Experiment model](#experiment-model)
@@ -97,7 +97,7 @@ fairysdk/
 ├── target.go
 ├── report.go
 ├── observation.go
-├── result.go
+├── evidence.go
 ├── state.go
 │
 ├── probe/
@@ -106,7 +106,8 @@ fairysdk/
 │   ├── tls.go
 │   ├── http.go
 │   ├── udp.go
-│   └── quic.go
+│   ├── quic.go
+│   └── common.go
 │
 ├── policy/
 │   ├── policy.go
@@ -119,6 +120,8 @@ fairysdk/
 │   └── infer.go
 │
 ├── internal/
+│   ├── model/
+│   │   └── types.go
 │   └── runner.go
 │
 ├── cmd/fairy/
@@ -170,7 +173,7 @@ type Observation struct {
     Layer      Layer         `json:"layer"`
     Status     Status        `json:"status"`
     Duration   time.Duration `json:"duration"`
-    Results    []Result      `json:"results,omitempty"`
+    Evidence   []Evidence    `json:"evidence,omitempty"`
     Error      string        `json:"error,omitempty"`
 }
 ```
@@ -179,7 +182,7 @@ Do **not** return raw errors as your diagnostic model. Convert them into
 structured experiment data.
 
 ```go
-type Result struct {
+type Evidence struct {
     Kind   string         `json:"kind"`
     Values map[string]any `json:"values,omitempty"`
 }
@@ -191,13 +194,15 @@ type Result struct {
 
 ```go
 type Experiment struct {
-    ID        string
-    Target    Target
-    IPFamily  IPFamily
-    Transport Transport
-    Resolver  ResolverMode
-    ALPN      string
-    Payload   int
+    ID        string       `json:"id"`
+    Target    Target       `json:"target"`
+    Layer     Layer        `json:"layer"`
+    IPFamily  IPFamily     `json:"ip_family,omitempty"`
+    Transport Transport    `json:"transport,omitempty"`
+    Resolver  ResolverMode `json:"resolver,omitempty"`
+    ALPN      string       `json:"alpn,omitempty"`
+    SNI       string       `json:"sni,omitempty"`
+    Payload   int          `json:"payload,omitempty"`
 }
 ```
 
@@ -270,10 +275,10 @@ No hidden mutation inside policies.
 ```mermaid
 flowchart TD
     S[Start] --> P{Policy?}
-    P --> Fast[FastPolicy\nfixed tree]
-    P --> Adap[AdaptivePolicy\nhypothesis scoring]
-    P --> Fact[FactorialPolicy\nCartesian product]
-    P --> Tag[TaguchiPolicy\northogonal arrays]
+    P --> Fast["FastPolicy<br/>fixed tree"]
+    P --> Adap["AdaptivePolicy<br/>hypothesis scoring"]
+    P --> Fact["FactorialPolicy<br/>Cartesian product"]
+    P --> Tag["TaguchiPolicy<br/>orthogonal arrays"]
 
     Fast --> Run[Execute probes]
     Adap --> Run
@@ -309,11 +314,11 @@ func Infer(state SurveyState) []Finding
 type Finding struct {
     Kind       string     `json:"kind"`
     Confidence Confidence `json:"confidence"`
-    Results    []string   `json:"results"`
+    Evidence   []string   `json:"evidence"`
 }
 ```
 
-Confidence: `Confirmed` · `Likely` · `Possible` · `InsufficientData`
+Confidence: `Confirmed` · `Likely` · `Possible` · `InsufficientEvidence`
 
 Experiment data first. Interpretation second.
 
@@ -328,6 +333,10 @@ type Report struct {
     Duration     time.Duration `json:"duration"`
     Observations []Observation `json:"observations"`
     Findings     []Finding     `json:"findings"`
+
+    // State is the survey state that produced this report. It is not
+    // serialized with the report; persist it separately for resume.
+    State *SurveyState `json:"-"`
 }
 ```
 
@@ -345,6 +354,10 @@ QUIC       FAIL      timeout
 Finding:
   QUIC unavailable on this path
   Confidence: likely
+  Evidence:
+    - TCP/443 succeeds
+    - TLS over TCP succeeds
+    - UDP/443 QUIC handshake timed out
 ```
 
 JSON: `fairy survey https://example.com --json`
@@ -425,23 +438,23 @@ fairy survey https://example.com --json
 
 ## Current status
 
-v0.1.0-pre — public API, experiment model, and dependency set are frozen.
-Implementation is underway. First milestone: `fairy survey https://example.com`
-returning structured results from DNS, TCP, TLS, HTTP, and QUIC.
+v0.1.0-pre — implemented and race-clean (`go test -race ./...`), release
+pending. `fairy survey https://example.com` returns structured results
+from DNS, TCP, TLS, HTTP, UDP, and QUIC with a deterministic `Report`.
 
 ---
 
 ## Roadmap
 
-- [ ] Go API freeze (`Survey`, `New`, `Config`)
-- [ ] DNS / TCP / TLS / HTTP / QUIC / UDP probes
-- [ ] FastPolicy + basic AdaptivePolicy
-- [ ] Structured Results + Findings
-- [ ] JSON output + CLI
-- [ ] Restartable `SurveyState`
-- [ ] `go test -race ./...` clean
+- [x] Go API freeze (`Survey`, `New`, `Config`)
+- [x] DNS / TCP / TLS / HTTP / QUIC / UDP probes
+- [x] FastPolicy + basic AdaptivePolicy
+- [x] Structured Evidence + Findings
+- [x] JSON output + CLI
+- [x] Restartable `SurveyState`
+- [x] `go test -race ./...` clean
 - [ ] v0.1.0-pre release
-- [ ] FactorialPolicy, TaguchiPolicy
+- [x] FactorialPolicy, TaguchiPolicy
 
 Non-goals for V0: packet capture, eBPF, traceroute, raw ICMP, DoH, DoT,
 custom proxy protocols, GUI, distributed execution, ML inference.
@@ -461,7 +474,7 @@ custom proxy protocols, GUI, distributed execution, ML inference.
 
 ## Docs
 
-- `docs/concepts.md` — Target, Observation, Result, Finding, Experiment
+- `docs/concepts.md` — Target, Observation, Evidence, Finding, Experiment
 - `docs/experiment-model.md` — deterministic IDs, layers, survey state
 - `docs/probe-contract.md` — the `Probe` interface
 - `docs/policy-model.md` — Fast, Adaptive, Factorial, Taguchi
