@@ -38,6 +38,7 @@ const (
 	KindQUICUnavailable           = infer.KindQUICUnavailable
 	KindHTTPApplicationRejection  = infer.KindHTTPApplicationRejection
 	KindPossibleProxyInterference = infer.KindPossibleProxyInterference
+	KindPartialAddressFailure     = infer.KindPartialAddressFailure
 	KindPathHealthy               = infer.KindPathHealthy
 )
 
@@ -50,7 +51,12 @@ func RenderReport(w io.Writer, r *Report) error {
 	b.WriteString("FAIRY SURVEY\n\n")
 	b.WriteString("Target: " + displayURL(r.Target) + "\n\n")
 	for _, o := range r.Observations {
-		fmt.Fprintf(&b, "%-14s %-9s %s\n", obsLabel(o), statusText(o.Status), outcomeText(o))
+		marker := ""
+		if o.PartialAddressFailure() {
+			passed, failed := o.AddressTally()
+			marker = fmt.Sprintf("  [%d/%d addresses failed]", failed, passed+failed)
+		}
+		fmt.Fprintf(&b, "%-14s %-9s %s%s\n", obsLabel(o), statusText(o.Status), outcomeText(o), marker)
 	}
 	b.WriteString("\n")
 	for _, f := range r.Findings {

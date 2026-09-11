@@ -327,3 +327,63 @@ func failObsFor(e model.Experiment, evidence ...model.Evidence) model.Observatio
 	o.Error = "synthetic failure"
 	return o
 }
+
+// Regression: one dead address out of several must be reported as a
+// partial address failure, not hidden behind the hostname verdict.
+func TestPartialAddressFailureFinding(t *testing.T) {
+	target := tgt(t)
+	dnsO := model.NewObservation(model.NewDNSExperiment(target, model.ResolverSystem), model.Pass, time.Millisecond)
+
+	timeoutCase := model.NewObservation(model.NewTCPExperiment(target, model.IPv4), model.Pass, 20*time.Millisecond)
+	timeoutCase.Addresses = []model.AddressOutcome{
+		{IP: "185.199.110.133", Status: model.Pass, Duration: 2 * time.Millisecond},
+		{IP: "185.199.109.133", Status: model.Timeout, Duration: 3 * time.Second, Kind: model.KindTimeout},
+	}
+	s := model.SurveyState{SurveyID: "t", Target: &target}
+	_ = s.AddObservation(dnsO)
+	_ = s.AddObservation(timeoutCase)
+
+	got := Infer(s)
+	if len(got) != 1 || got[0].Kind != KindPartialAddressFailure {
+		t.Fatalf("findings = %v, want [partial_address_failure]", kinds(got))
+	}
+	if got[0].Confidence != model.Likely {
+		t.Fatalf("timeout-only partial failure must stay likely, got %s", got[0].Confidence)
+	}
+	if len(got[0].Evidence) == 0 {
+		t.Fatal("partial failure must cite the addresses")
+	}
+
+	// A refusal is definitive evidence, so the finding is confirmed.
+	refusedCase := model.NewObservation(model.NewTCPExperiment(target, model.IPv4), model.Pass, 20*time.Millisecond)
+	refusedCase.Addresses = []model.AddressOutcome{
+		{IP: "192.0.2.10", Status: model.Pass, Duration: time.Millisecond},
+		{IP: "192.0.2.11", Status: model.Fail, Duration: time.Millisecond, Kind: model.KindTCPRefused},
+	}
+	s2 := model.SurveyState{SurveyID: "t2", Target: &target}
+	_ = s2.AddObservation(dnsO)
+	_ = s2.AddObservation(refusedCase)
+	got2 := Infer(s2)
+	if len(got2) != 1 || got2[0].Confidence != model.Confirmed {
+		t.Fatalf("refused partial failure should be confirmed: %+v", got2)
+	}
+}
+
+// A uniform outcome is not a partial failure.
+func TestNoPartialFailureWhenUniform(t *testing.T) {
+	target := tgt(t)
+	dnsO := model.NewObservation(model.NewDNSExperiment(target, model.ResolverSystem), model.Pass, time.Millisecond)
+	tcpO := model.NewObservation(model.NewTCPExperiment(target, model.IPv4), model.Pass, 20*time.Millisecond)
+	tcpO.Addresses = []model.AddressOutcome{
+		{IP: "192.0.2.10", Status: model.Pass, Duration: time.Millisecond},
+		{IP: "192.0.2.11", Status: model.Pass, Duration: time.Millisecond},
+	}
+	s := model.SurveyState{SurveyID: "t", Target: &target}
+	_ = s.AddObservation(dnsO)
+	_ = s.AddObservation(tcpO)
+	for _, f := range Infer(s) {
+		if f.Kind == KindPartialAddressFailure {
+			t.Fatalf("uniform success must not be a partial failure: %+v", f)
+		}
+	}
+}

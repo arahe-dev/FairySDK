@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/arahe-dev/fairy/internal/model"
@@ -21,16 +22,17 @@ type TLS struct {
 	InsecureSkipVerify bool
 }
 
-// Run performs one TLS handshake experiment.
+// Run performs one TLS handshake experiment. Any resolved address that
+// completes a handshake makes the hostname pass; the outcome of each
+// attempted address is recorded.
+//
+// The handshake is attempted per address, not merely per connection: an
+// address can accept TCP and then stall or be intercepted during the
+// handshake, so connection-level failover alone would still land on the
+// bad address and report a healthy hostname as broken.
 func (p *TLS) Run(ctx context.Context, e model.Experiment) model.Observation {
 	start := time.Now()
 	o := model.NewObservation(e, model.Unknown, 0)
-	rawConn, err := dialIP(ctx, e, "tcp")
-	if err != nil {
-		fillConnError(ctx, &o, err, start)
-		return o
-	}
-	defer rawConn.Close()
 
 	sni := sniFor(e)
 	cfg := &tls.Config{
@@ -40,11 +42,25 @@ func (p *TLS) Run(ctx context.Context, e model.Experiment) model.Observation {
 		InsecureSkipVerify: p.InsecureSkipVerify || sni == "",
 		MinVersion:         tls.VersionTLS12,
 	}
-	tconn := tls.Client(rawConn, cfg)
-	hsErr := tconn.HandshakeContext(ctx)
+
+	tconn, outcomes, repErr, err := attemptTLS(ctx, e, cfg)
 	o.Duration = time.Since(start)
-	if hsErr != nil {
-		fillTLSError(&o, hsErr)
+	if err != nil {
+		fillPrereq(&o, err)
+		return o
+	}
+	o.Addresses = outcomes
+	if tconn == nil {
+		// Nothing completed a handshake: report the representative
+		// failure with full evidence (alert code, certificate class).
+		if repErr != nil {
+			fillTLSError(&o, repErr)
+		} else {
+			status, kind, text := aggregateStatus(outcomes)
+			o.Status = status
+			o.Error = text
+			addFailureEvidence(&o, kind)
+		}
 		return o
 	}
 	defer tconn.Close()
@@ -52,8 +68,9 @@ func (p *TLS) Run(ctx context.Context, e model.Experiment) model.Observation {
 	cs := tconn.ConnectionState()
 	o.Status = model.Pass
 	o.AddEvidence(model.KindTLSVersion, map[string]any{
-		"name":        tls.VersionName(cs.Version),
+		"name":         tls.VersionName(cs.Version),
 		"handshake_ms": ms(o.Duration),
+		"addresses":    len(outcomes),
 	})
 	o.AddEvidence(model.KindCipherSuite, map[string]any{
 		"name": tls.CipherSuiteName(cs.CipherSuite),
@@ -65,6 +82,113 @@ func (p *TLS) Run(ctx context.Context, e model.Experiment) model.Observation {
 		o.AddEvidence(model.KindALPNSelected, map[string]any{"protocol": cs.NegotiatedProtocol})
 	}
 	return o
+}
+
+// attemptTLS connects to and handshakes with every resolved address at
+// once, waiting for all of them. It returns the first connection that
+// completed a handshake in resolver order, the outcome of every address,
+// a representative raw error when none succeeded, and a prerequisite
+// error when resolution itself failed.
+func attemptTLS(ctx context.Context, e model.Experiment, cfg *tls.Config) (*tls.Conn, []model.AddressOutcome, error, error) {
+	addrs, err := resolveAll(ctx, e)
+	if err != nil {
+		return nil, nil, nil, &prereqError{err}
+	}
+
+	type tlsAttempt struct {
+		ip   string
+		conn *tls.Conn
+		err  error
+		d    time.Duration
+	}
+	results := make(chan tlsAttempt, len(addrs))
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	sem := make(chan struct{}, addrAttemptLimit)
+	var wg sync.WaitGroup
+	for _, ip := range addrs {
+		wg.Add(1)
+		go func(ip string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			start := time.Now()
+			rawConn, derr := dialOne(runCtx, ip, e.Target.Port, "tcp")
+			if derr != nil {
+				results <- tlsAttempt{ip: ip, err: derr, d: time.Since(start)}
+				return
+			}
+			conn := tls.Client(rawConn, cfg)
+			if herr := conn.HandshakeContext(runCtx); herr != nil {
+				_ = rawConn.Close()
+				results <- tlsAttempt{ip: ip, err: herr, d: time.Since(start)}
+				return
+			}
+			results <- tlsAttempt{ip: ip, conn: conn, d: time.Since(start)}
+		}(ip)
+	}
+	go func() {
+		wg.Wait()
+		close(results)
+	}()
+
+	byIP := make(map[string]tlsAttempt, len(addrs))
+	for a := range results {
+		byIP[a.ip] = a
+	}
+
+	var (
+		winner   *tls.Conn
+		outcomes []model.AddressOutcome
+		repErr   error
+	)
+	for _, ip := range addrs { // resolver order keeps reports deterministic
+		a, ok := byIP[ip]
+		if !ok {
+			continue
+		}
+		out := model.AddressOutcome{IP: ip, Status: model.Pass, Duration: a.d}
+		switch {
+		case a.err != nil:
+			out.Status, out.Kind, out.Error = classifyTLSError(a.err)
+			if repErr == nil {
+				repErr = a.err
+			}
+		case winner == nil:
+			winner = a.conn
+		default:
+			_ = a.conn.Close()
+		}
+		outcomes = append(outcomes, out)
+	}
+	return winner, outcomes, repErr, nil
+}
+
+// classifyTLSError maps a handshake failure onto status plus an evidence
+// kind.
+func classifyTLSError(err error) (model.Status, string, string) {
+	var ae tls.AlertError
+	var cve *tls.CertificateVerificationError
+	switch {
+	case errors.As(err, &ae):
+		return model.Fail, model.KindTLSAlert,
+			"tls alert " + strconv.Itoa(int(ae)) + " (" + alertName(uint8(ae)) + ")"
+	case errors.As(err, &cve):
+		return model.Fail, model.KindCertificate, "certificate verification failed: " + cve.Error()
+	case isRefused(err):
+		return model.Fail, model.KindTCPRefused, "connection refused"
+	case isUnreachable(err):
+		return model.Fail, model.KindNetworkUnreachable, "network unreachable"
+	case isReset(err):
+		return model.Fail, model.KindTCPReset, "connection reset during handshake"
+	case isTimeout(err):
+		return model.Timeout, model.KindTimeout, "tls handshake timed out"
+	case isCanceled(err):
+		return model.Timeout, model.KindTimeout, "canceled"
+	default:
+		return model.Unknown, "", err.Error()
+	}
 }
 
 // sniFor resolves the SNI for an experiment: empty means the target
@@ -125,6 +249,10 @@ func fillTLSError(o *model.Observation, err error) {
 		o.Status = model.Fail
 		o.Error = "connection refused"
 		o.AddEvidence(model.KindTCPRefused, nil)
+	case isUnreachable(err):
+		o.Status = model.Fail
+		o.Error = "network unreachable"
+		o.AddEvidence(model.KindNetworkUnreachable, nil)
 	case isTimeout(err):
 		o.Status = model.Timeout
 		o.Error = "tls handshake timed out"

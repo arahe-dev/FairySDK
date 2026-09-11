@@ -1,5 +1,26 @@
 # Changelog
 
+## v0.3.0
+
+Per-address verdicts (bug fix found by real-network diagnosis):
+
+- A hostname's verdict is no longer the first resolved address's verdict.
+  TCP now dials every address of the requested family at once and waits for
+  all of them; TLS completes a handshake per address; QUIC attempts a
+  handshake per address; HTTP tries each address in turn with a slice of
+  the remaining budget. The hostname passes if any address works.
+- `Observation` gained an `addresses` array recording the outcome of every
+  attempted address (status, duration, evidence kind, error), so a partial
+  failure is visible in the evidence instead of hidden by DNS order.
+- New finding `partial_address_failure` (`likely`, or `confirmed` when a
+  refusal or unroutable verdict proves it), with the failing addresses
+  cited. Console output marks such lines with "[n/m addresses failed]".
+- Found on `objects.githubusercontent.com`: all four Fastly addresses
+  accept TCP, but one (185.199.109.133) stalls during the TLS handshake.
+  The old first-address logic reported the hostname as broken on runs that
+  happened to resolve that address first; it now passes with the bad
+  address named. HTTP/3 also rides the QUIC connection that verified,
+  instead of dialing again.
 ## v0.2.0
 
 Agent-facing CLI additions (Go SDK API unchanged):

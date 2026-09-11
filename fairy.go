@@ -97,11 +97,11 @@ func (f *Fairy) Resume(ctx context.Context, state SurveyState) (*Report, error) 
 
 func (f *Fairy) run(ctx context.Context, state *SurveyState) (*Report, error) {
 	return internal.RunSurvey(ctx, internal.Options{
-		MaxProbes:            f.cfg.MaxProbes,
-		MaxConcurrent:        f.cfg.MaxConcurrent,
-		Timeout:              f.cfg.Timeout,
-		RootCAs:              f.cfg.TLSRootCAs,
-		InsecureSkipVerify:   f.cfg.TLSInsecureSkipVerify,
+		MaxProbes:          f.cfg.MaxProbes,
+		MaxConcurrent:      f.cfg.MaxConcurrent,
+		Timeout:            f.cfg.Timeout,
+		RootCAs:            f.cfg.TLSRootCAs,
+		InsecureSkipVerify: f.cfg.TLSInsecureSkipVerify,
 	}, f.cfg.Policy, state)
 }
 

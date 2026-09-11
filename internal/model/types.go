@@ -202,6 +202,19 @@ const (
 	KindTimeout              = "timeout"
 )
 
+// AddressOutcome records what happened when a probe tried one of the
+// addresses a hostname resolved to. A hostname's verdict is not any
+// single address's verdict: some addresses of a name can fail while
+// others work, and reporting only the first resolved address turns that
+// into a wrong diagnosis.
+type AddressOutcome struct {
+	IP       string        `json:"ip"`
+	Status   Status        `json:"status"`
+	Duration time.Duration `json:"duration"`
+	Kind     string        `json:"kind,omitempty"`
+	Error    string        `json:"error,omitempty"`
+}
+
 // Observation is the complete record of one experiment at one layer.
 type Observation struct {
 	Experiment Experiment    `json:"experiment"`
@@ -209,7 +222,30 @@ type Observation struct {
 	Status     Status        `json:"status"`
 	Duration   time.Duration `json:"duration"`
 	Evidence   []Evidence    `json:"evidence,omitempty"`
-	Error      string        `json:"error,omitempty"`
+	// Addresses records the outcome of every resolved address the probe
+	// attempted, so partial failures stay visible.
+	Addresses []AddressOutcome `json:"addresses,omitempty"`
+	Error     string           `json:"error,omitempty"`
+}
+
+// AddressTally counts attempted addresses by outcome.
+func (o Observation) AddressTally() (passed, failed int) {
+	for _, a := range o.Addresses {
+		if a.Status == Pass {
+			passed++
+		} else {
+			failed++
+		}
+	}
+	return passed, failed
+}
+
+// PartialAddressFailure reports whether some addresses of the target
+// worked while others did not — an address-specific defect that a
+// single-address verdict would hide.
+func (o Observation) PartialAddressFailure() bool {
+	passed, failed := o.AddressTally()
+	return passed > 0 && failed > 0
 }
 
 // NewObservation starts an observation for an experiment.

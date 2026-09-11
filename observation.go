@@ -71,6 +71,10 @@ func ExperimentID(e Experiment) string {
 // Round records one policy proposal round.
 type Round = model.Round
 
+// AddressOutcome records what happened when a probe tried one resolved
+// address. Some addresses of a hostname can fail while others work.
+type AddressOutcome = model.AddressOutcome
+
 // Observation is the complete record of one experiment at one layer.
 // Raw errors are never the diagnostic model: they become Evidence.
 type Observation = model.Observation

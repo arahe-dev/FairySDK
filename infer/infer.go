@@ -15,15 +15,16 @@ import (
 
 // Finding kinds produced by Infer.
 const (
-	KindDNSFailure              = "dns_failure"
-	KindIPv6PathFailure         = "ipv6_path_failure"
-	KindTCPUnreachable          = "tcp_unreachable"
-	KindTLSSpecificFailure      = "tls_specific_failure"
-	KindUDPUnavailable          = "udp_unavailable"
-	KindQUICUnavailable         = "quic_unavailable"
-	KindHTTPApplicationRejection = "http_application_rejection"
+	KindDNSFailure                = "dns_failure"
+	KindIPv6PathFailure           = "ipv6_path_failure"
+	KindTCPUnreachable            = "tcp_unreachable"
+	KindTLSSpecificFailure        = "tls_specific_failure"
+	KindUDPUnavailable            = "udp_unavailable"
+	KindQUICUnavailable           = "quic_unavailable"
+	KindHTTPApplicationRejection  = "http_application_rejection"
 	KindPossibleProxyInterference = "possible_proxy_interference"
-	KindPathHealthy             = "path_healthy"
+	KindPartialAddressFailure     = "partial_address_failure"
+	KindPathHealthy               = "path_healthy"
 )
 
 // Describe returns a short human-readable sentence for a finding kind.
@@ -45,6 +46,8 @@ func Describe(kind string) string {
 		return "The HTTP application rejects the request"
 	case KindPossibleProxyInterference:
 		return "Inconsistent path results suggest possible proxy interference"
+	case KindPartialAddressFailure:
+		return "Some addresses of the target fail while others work"
 	case KindPathHealthy:
 		return "All probed layers passed"
 	default:
@@ -180,6 +183,52 @@ func Infer(state model.SurveyState) []model.Finding {
 				add(KindHTTPApplicationRejection, model.Confirmed, http)
 			}
 		}
+	}
+
+	// Partial address failure: the hostname resolved to several addresses
+	// and they did not all behave the same. A first-address verdict hides
+	// exactly this defect, which is why the observation records every
+	// attempted address.
+	var (
+		partialEvidence []string
+		partialDefinite bool
+		partialSeen     bool
+	)
+	for i := range state.Observations {
+		o := &state.Observations[i]
+		passed, failed := o.AddressTally()
+		if passed == 0 || failed == 0 {
+			continue
+		}
+		partialSeen = true
+		partialEvidence = append(partialEvidence,
+			fmt.Sprintf("%s: %d/%d addresses passed", o.Layer, passed, passed+failed))
+		for _, a := range o.Addresses {
+			if a.Status == model.Pass {
+				continue
+			}
+			// A refusal or an unroutable kernel verdict is definitive; a
+			// timeout may still be transient.
+			if a.Status == model.Fail {
+				partialDefinite = true
+			}
+			detail := strings.ToUpper(string(a.Status))
+			if a.Duration > 0 {
+				detail += " " + a.Duration.Truncate(time.Millisecond).String()
+			}
+			partialEvidence = append(partialEvidence, fmt.Sprintf("%s %s %s", o.Layer, a.IP, detail))
+		}
+	}
+	if partialSeen {
+		conf := model.Likely
+		if partialDefinite {
+			conf = model.Confirmed
+		}
+		out = append(out, model.Finding{
+			Kind:       KindPartialAddressFailure,
+			Confidence: conf,
+			Evidence:   partialEvidence,
+		})
 	}
 
 	// A healthy path when everything probed passed.

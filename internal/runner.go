@@ -31,11 +31,11 @@ const (
 
 // Options configure one survey run.
 type Options struct {
-	MaxProbes            int
-	MaxConcurrent        int
-	Timeout              time.Duration
-	RootCAs              *x509.CertPool
-	InsecureSkipVerify   bool
+	MaxProbes          int
+	MaxConcurrent      int
+	Timeout            time.Duration
+	RootCAs            *x509.CertPool
+	InsecureSkipVerify bool
 }
 
 func (o *Options) fill() {
